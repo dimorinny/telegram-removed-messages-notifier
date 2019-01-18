@@ -12,12 +12,14 @@ class Command:
             messages_buffer_size: int,
             api_id: int,
             api_hash: str,
-            phone_number: str
+            phone_number: str,
+            send_stacktrace_to_telegram: bool = True
     ):
         self._messages_buffer_size = int(messages_buffer_size)
         self._api_id = int(api_id)
         self._api_hash = str(api_hash)
         self._phone_number = str(phone_number)
+        self._send_stacktrace_to_telegram = bool(send_stacktrace_to_telegram)
 
     def start(self, session: str):
         asyncio.run(
@@ -37,7 +39,8 @@ class Command:
 
         await MessagesHandler(
             messages_buffer_size=self._messages_buffer_size,
-            client=client
+            client=client,
+            send_stacktrace_to_telegram=self._send_stacktrace_to_telegram
         ).handle()
 
     async def _make_session(self, session: str):
@@ -68,6 +71,8 @@ With arguments: {arguments}
 Api id: {api_id}
 Api hash: {api_hash}
 Phone number: {phone_number}
+Buffer size: {buffer_size}
+Send stacktrace to telegram: {send_stacktrace_to_telegram}
 User info: {user}
             """.format(
                 command=command,
@@ -75,6 +80,8 @@ User info: {user}
                 api_id=self._api_id,
                 api_hash=self._api_hash,
                 phone_number=self._phone_number,
+                buffer_size=self._messages_buffer_size,
+                send_stacktrace_to_telegram=self._send_stacktrace_to_telegram,
                 user=me.stringify()
             )
         )
