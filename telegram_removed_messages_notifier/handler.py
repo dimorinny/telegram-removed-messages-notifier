@@ -6,6 +6,55 @@ from telethon import TelegramClient, events
 from .buffer import CircularBufferDictionary
 
 
+class MessagesBuffer:
+
+    def __init__(
+            self,
+            limit: int
+    ):
+        self._buffer = CircularBufferDictionary(
+            limit=limit
+        )
+
+    def get(self, identifier):
+        return self._buffer.get(identifier, None)
+
+    def add(self, message):
+        identifier = message.id
+
+        if identifier in self._buffer:
+            print('Identifier: {identifier} already exists in buffer. Possibly edited message'.format(
+                identifier=identifier
+            ))
+            self._buffer[identifier].revisions.append(message)
+        else:
+            print('New message in buffer with identifier: {identifier}'.format(
+                identifier=identifier
+            ))
+            self._buffer[identifier] = SavedMessage(
+                identifier=identifier,
+                revisions=[message]
+            )
+
+    def remove(self, identifier):
+        self._buffer.pop(identifier, None)
+
+    @property
+    def size(self):
+        return len(self._buffer)
+
+
+class SavedMessage:
+
+    def __init__(
+            self,
+            identifier: int,
+            revisions
+    ):
+        self.identifier = identifier
+        self.revisions = revisions
+
+
 class MessagesHandler:
     TAG = '#resender'
 
@@ -21,7 +70,7 @@ class MessagesHandler:
 
     async def handle(self):
         me = await self._client.get_me()
-        messages_buffer = CircularBufferDictionary(
+        messages_buffer = MessagesBuffer(
             limit=self._messages_buffer_size
         )
 
@@ -32,10 +81,25 @@ class MessagesHandler:
 
             print('Adding message to buffer...')
             message = event.message
-            messages_buffer[message.id] = message
+            messages_buffer.add(message=message)
             print('Message with id: {id} added to buffer. Current buffer size: {size}/{capacity}'.format(
                 id=message.id,
-                size=len(messages_buffer),
+                size=messages_buffer.size,
+                capacity=self._messages_buffer_size
+            ))
+
+        @self._client.on(event=events.MessageEdited(incoming=True))
+        @self._notify(me=me)
+        async def handler_edited(event):
+            print('Received edit for message: {event}'.format(
+                event=event
+            ))
+            print('Adding edited message to buffer...')
+            message = event.message
+            messages_buffer.add(message=message)
+            print('Edited message with id: {id} added to buffer. Current buffer size: {size}/{capacity}'.format(
+                id=message.id,
+                size=messages_buffer.size,
                 capacity=self._messages_buffer_size
             ))
 
@@ -46,19 +110,30 @@ class MessagesHandler:
                 messages=event
             ))
             for deleted_id in event.deleted_ids:
-                if deleted_id in messages_buffer:
+                message = messages_buffer.get(deleted_id)
+
+                if message is not None:
                     print('Message with id: {id} found in messages buffer'.format(
                         id=deleted_id
                     ))
 
-                    print('Forwarding message with id: {id}...'.format(
+                    print('Forwarding {revisions} revisions of message with id: {id}...'.format(
+                        revisions=len(message.revisions),
                         id=deleted_id
                     ))
-                    await self._resend_message(
-                        to=me,
-                        message=messages_buffer[deleted_id]
-                    )
-                    messages_buffer.pop(deleted_id, None)
+
+                    for index, revision in enumerate(message.revisions):
+                        print('Forwarding revision: {revision}...'.format(
+                            revision=revision
+                        ))
+                        await self._resend_message(
+                            to=me,
+                            revision_number=index + 1,
+                            message=revision
+                        )
+                        messages_buffer.remove(deleted_id)
+                        print('Revision forwarded')
+
                     print('Message with id: {id} forwarded'.format(
                         id=deleted_id
                     ))
@@ -99,7 +174,12 @@ class MessagesHandler:
         return _notify_decorator
 
     # noinspection PyBroadException
-    async def _resend_message(self, message, to):
+    async def _resend_message(
+            self,
+            revision_number,
+            message,
+            to
+    ):
         print('Loading user by id: {id}'.format(
             id=message.from_id
         ))
@@ -122,13 +202,15 @@ class MessagesHandler:
         modified_message.message = '''
 {tag}
 
+revision: {revision_number}
 {date}: @{user_from}:
 {message}
         '''.format(
             tag=MessagesHandler.TAG,
+            revision_number=revision_number,
             date=modified_message.date.strftime("%Y-%m-%d %H:%M"),
             user_from=user,
-            message=modified_message.message
+            message=modified_message.message,
         )
 
         await self._client.send_message(
